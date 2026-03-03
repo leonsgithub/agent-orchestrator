@@ -251,10 +251,20 @@ export async function enrichSessionPR(
     unresolvedComments: dashboard.pr.unresolvedComments,
   };
 
-  // Use shorter TTL for terminal states (merged/closed) — no need to re-check often
-  const ttl = dashboard.pr.state === "merged" || dashboard.pr.state === "closed"
-    ? 5 * 60_000 // 5 min for terminal states
-    : undefined;  // default TTL for open PRs
+  // Adaptive TTL based on PR state:
+  // - Terminal states (merged/closed): 5 min (won't change)
+  // - Active CI (pending/running checks): 15s (changes rapidly)
+  // - Stable open PRs: default 60s
+  const hasActiveCI = dashboard.pr.ciStatus === "pending" ||
+    dashboard.pr.ciChecks.some((c) => c.status === "pending" || c.status === "running");
+  let ttl: number | undefined;
+  if (dashboard.pr.state === "merged" || dashboard.pr.state === "closed") {
+    ttl = 5 * 60_000; // 5 min for terminal states
+  } else if (hasActiveCI) {
+    ttl = 15_000; // 15s for active CI — changes rapidly
+  }
+  // else: undefined → default 60s TTL
+
   prCache.set(cacheKey, cacheData, ttl);
   return true;
 }

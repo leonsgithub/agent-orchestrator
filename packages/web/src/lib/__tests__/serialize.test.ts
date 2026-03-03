@@ -488,6 +488,62 @@ describe("enrichSessionPR", () => {
     vi.useRealTimers();
   });
 
+  it("should use shorter TTL (15s) when CI checks are pending", async () => {
+    vi.useFakeTimers();
+
+    const pr = createPRInfo();
+    const coreSession = createCoreSession({ pr });
+    const dashboard = sessionToDashboard(coreSession);
+
+    // SCM returns pending CI status
+    const scm: SCM = {
+      ...createMockSCM(),
+      getCISummary: vi.fn().mockResolvedValue("pending"),
+      getCIChecks: vi.fn().mockResolvedValue([
+        { name: "build", status: "running", url: "https://example.com" },
+      ]),
+    };
+
+    await enrichSessionPR(dashboard, scm, pr);
+    expect(dashboard.pr?.ciStatus).toBe("pending");
+
+    const cacheKey = prCacheKey(pr.owner, pr.repo, pr.number);
+
+    // Cache should still be valid at 14 seconds
+    vi.advanceTimersByTime(14_000);
+    expect(prCache.get(cacheKey)).not.toBeNull();
+
+    // Cache should expire after 15 seconds
+    vi.advanceTimersByTime(1_001);
+    expect(prCache.get(cacheKey)).toBeNull();
+
+    vi.useRealTimers();
+  });
+
+  it("should use default TTL (60s) when CI is stable (passing)", async () => {
+    vi.useFakeTimers();
+
+    const pr = createPRInfo();
+    const coreSession = createCoreSession({ pr });
+    const dashboard = sessionToDashboard(coreSession);
+    const scm = createMockSCM(); // Returns passing CI
+
+    await enrichSessionPR(dashboard, scm, pr);
+    expect(dashboard.pr?.ciStatus).toBe("passing");
+
+    const cacheKey = prCacheKey(pr.owner, pr.repo, pr.number);
+
+    // Cache should still be valid at 59 seconds
+    vi.advanceTimersByTime(59_000);
+    expect(prCache.get(cacheKey)).not.toBeNull();
+
+    // Cache should expire after 60 seconds
+    vi.advanceTimersByTime(1_001);
+    expect(prCache.get(cacheKey)).toBeNull();
+
+    vi.useRealTimers();
+  });
+
   it("should handle missing optional SCM methods", async () => {
     const pr = createPRInfo();
     const coreSession = createCoreSession({ pr });
