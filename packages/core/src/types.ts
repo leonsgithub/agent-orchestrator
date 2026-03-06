@@ -178,6 +178,10 @@ export interface SessionSpawnConfig {
   prompt?: string;
   /** Override the agent plugin for this session (e.g. "codex", "claude-code") */
   agent?: string;
+  /** Decomposition context — ancestor task chain (passed to prompt builder) */
+  lineage?: string[];
+  /** Decomposition context — sibling task descriptions (passed to prompt builder) */
+  siblings?: string[];
 }
 
 /** Config for creating an orchestrator session */
@@ -480,6 +484,7 @@ export interface IssueFilters {
 export interface IssueUpdate {
   state?: "open" | "in_progress" | "closed";
   labels?: string[];
+  removeLabels?: string[];
   assignee?: string;
   comment?: string;
 }
@@ -903,6 +908,18 @@ export interface ProjectConfig {
 
   /** Rules for the orchestrator agent (stored, reserved for future use) */
   orchestratorRules?: string;
+
+  /** Task decomposition configuration */
+  decomposer?: {
+    /** Enable auto-decomposition for backlog issues (default: false) */
+    enabled: boolean;
+    /** Max recursion depth (default: 3) */
+    maxDepth: number;
+    /** Model to use for decomposition (default: claude-sonnet-4-20250514) */
+    model: string;
+    /** Require human approval before executing decomposed plans (default: true) */
+    requireApproval: boolean;
+  };
 }
 
 export interface TrackerConfig {

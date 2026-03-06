@@ -58,6 +58,15 @@ const AgentSpecificConfigSchema = z
   })
   .passthrough();
 
+const DecomposerConfigSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    maxDepth: z.number().min(1).max(5).default(3),
+    model: z.string().default("claude-sonnet-4-20250514"),
+    requireApproval: z.boolean().default(true),
+  })
+  .default({ enabled: false, maxDepth: 3, model: "claude-sonnet-4-20250514", requireApproval: true });
+
 const ProjectConfigSchema = z.object({
   name: z.string().optional(),
   repo: z.string(),
@@ -79,6 +88,7 @@ const ProjectConfigSchema = z.object({
   agentRules: z.string().optional(),
   agentRulesFile: z.string().optional(),
   orchestratorRules: z.string().optional(),
+  decomposer: DecomposerConfigSchema.optional(),
 });
 
 const DefaultPluginsSchema = z.object({

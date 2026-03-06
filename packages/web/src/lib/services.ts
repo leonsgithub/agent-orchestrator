@@ -15,6 +15,10 @@ import {
   createPluginRegistry,
   createSessionManager,
   createLifecycleManager,
+  decompose,
+  getLeaves,
+  getSiblings,
+  formatPlanTree,
   type OrchestratorConfig,
   type PluginRegistry,
   type SessionManager,
@@ -23,6 +27,9 @@ import {
   type ProjectConfig,
   type Tracker,
   type Issue,
+  type Session,
+  type DecomposerConfig,
+  DEFAULT_DECOMPOSER_CONFIG,
 } from "@composio/ao-core";
 
 // Static plugin imports — webpack needs these to be string literals
@@ -109,14 +116,57 @@ export function startBacklogPoller(): void {
   globalForBacklog._aoBacklogTimer = setInterval(() => void pollBacklog(), BACKLOG_POLL_INTERVAL);
 }
 
+// Track which issues we've already closed to avoid repeated API calls
+const closedIssues = new Set<string>();
+
+/** Close GitHub issues for sessions whose PRs have been merged. */
+async function closeIssuesForMergedSessions(
+  sessions: Session[],
+  config: OrchestratorConfig,
+  registry: PluginRegistry,
+): Promise<void> {
+  const mergedSessions = sessions.filter(
+    (s) => s.status === "merged" && s.issueId && !closedIssues.has(`${s.projectId}:${s.issueId}`),
+  );
+
+  for (const session of mergedSessions) {
+    const key = `${session.projectId}:${session.issueId}`;
+    const project = config.projects[session.projectId];
+    if (!project?.tracker) { closedIssues.add(key); continue; }
+
+    const tracker = registry.get<Tracker>("tracker", project.tracker.plugin);
+    if (!tracker?.updateIssue) { closedIssues.add(key); continue; }
+
+    try {
+      await tracker.updateIssue(
+        session.issueId!,
+        {
+          state: "closed",
+          labels: ["agent:done"],
+          removeLabels: ["agent:backlog", "agent:in-progress"],
+          comment: `Closed automatically — PR merged.`,
+        },
+        project,
+      );
+    } catch (err) {
+      console.error(`[backlog] Failed to close issue ${session.issueId}:`, err);
+    }
+    closedIssues.add(key);
+  }
+}
+
 async function pollBacklog(): Promise<void> {
   try {
     const { config, registry, sessionManager } = await getServices();
 
-    // Get all active sessions to check for duplicates and enforce concurrency limit
-    const activeSessions = await sessionManager.list();
+    // Get all sessions
+    const allSessions = await sessionManager.list();
     const terminalStatuses = new Set(["killed", "merged", "done", "terminated", "cleanup"]);
-    const workerSessions = activeSessions.filter(
+
+    // Close issues for merged sessions (label cleanup + issue close)
+    await closeIssuesForMergedSessions(allSessions, config, registry);
+
+    const workerSessions = allSessions.filter(
       (s) => !s.id.endsWith("-orchestrator") && !terminalStatuses.has(s.status),
     );
     const activeIssueIds = new Set(
@@ -153,9 +203,59 @@ async function pollBacklog(): Promise<void> {
         if (activeIssueIds.has(issue.id.toLowerCase())) continue;
 
         try {
-          await sessionManager.spawn({ projectId, issueId: issue.id });
+          const decompConfig = project.decomposer;
+          const shouldDecompose = decompConfig?.enabled ?? false;
+
+          if (shouldDecompose) {
+            // Decompose the issue before spawning
+            const taskDescription = `${issue.title}\n\n${issue.description}`;
+            const config: DecomposerConfig = { ...DEFAULT_DECOMPOSER_CONFIG, ...decompConfig };
+
+            console.log(`[backlog] Decomposing issue ${issue.id}: "${issue.title}"`);
+            const plan = await decompose(taskDescription, config);
+            const leaves = getLeaves(plan.tree);
+
+            if (leaves.length <= 1) {
+              // Atomic — spawn directly
+              await sessionManager.spawn({ projectId, issueId: issue.id });
+              availableSlots--;
+            } else if (config.requireApproval) {
+              // Post plan as comment and wait for human approval
+              const treeText = formatPlanTree(plan.tree);
+              if (tracker.updateIssue) {
+                await tracker.updateIssue(
+                  issue.id,
+                  {
+                    comment: `## Decomposition Plan\n\n\`\`\`\n${treeText}\n\`\`\`\n\n${leaves.length} subtasks identified. Remove \`agent:backlog\` and add \`agent:decompose-approved\` to execute.`,
+                    labels: ["agent:decompose-pending"],
+                    removeLabels: ["agent:backlog"],
+                  },
+                  project,
+                );
+              }
+              console.log(`[backlog] Posted decomposition plan for ${issue.id} (${leaves.length} subtasks, awaiting approval)`);
+            } else {
+              // Auto-execute: spawn each leaf with lineage context
+              console.log(`[backlog] Auto-executing decomposition for ${issue.id} (${leaves.length} subtasks)`);
+              for (const leaf of leaves) {
+                if (availableSlots <= 0) break;
+                const siblings = getSiblings(plan.tree, leaf.id);
+                await sessionManager.spawn({
+                  projectId,
+                  issueId: issue.id,
+                  lineage: leaf.lineage,
+                  siblings,
+                });
+                availableSlots--;
+              }
+            }
+          } else {
+            // No decomposition — spawn directly (classic behavior)
+            await sessionManager.spawn({ projectId, issueId: issue.id });
+            availableSlots--;
+          }
+
           activeIssueIds.add(issue.id.toLowerCase());
-          availableSlots--;
 
           // Mark as claimed on the tracker
           if (tracker.updateIssue) {
