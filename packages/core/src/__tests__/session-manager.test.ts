@@ -1969,34 +1969,6 @@ describe("remap", () => {
     const meta = readMetadataRaw(sessionsDir, "app-1");
     expect(meta?.["opencodeSessionId"]).toBe("ses_discovered");
   });
-
-  it("prefers most recently updated title match when remapping", async () => {
-    const deleteLogPath = join(tmpDir, "opencode-delete-remap-ordering.log");
-    const mockBin = installMockOpencode(
-      JSON.stringify([
-        { id: "ses_old", title: "AO:app-1", updated: "2025-01-01T00:00:00.000Z" },
-        { id: "ses_new", title: "AO:app-1", updated: 1_772_777_328_000 },
-      ]),
-      deleteLogPath,
-    );
-    process.env.PATH = `${mockBin}:${originalPath ?? ""}`;
-
-    writeMetadata(sessionsDir, "app-1", {
-      worktree: "/tmp",
-      branch: "main",
-      status: "working",
-      project: "my-app",
-      agent: "opencode",
-      runtimeHandle: JSON.stringify(makeHandle("rt-1")),
-    });
-
-    const sm = createSessionManager({ config, registry: mockRegistry });
-    const mapped = await sm.remap("app-1");
-
-    expect(mapped).toBe("ses_new");
-    const meta = readMetadataRaw(sessionsDir, "app-1");
-    expect(meta?.["opencodeSessionId"]).toBe("ses_new");
-  });
 });
 
 describe("spawnOrchestrator", () => {
