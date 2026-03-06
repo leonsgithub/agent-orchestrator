@@ -238,18 +238,25 @@ describe.skipIf(!canRun)("tracker-linear (integration)", () => {
     // Verify the comment was added — use direct API if available,
     // otherwise trust the plugin didn't throw
     if (LINEAR_API_KEY) {
-      const data = await linearGraphQL<{
-        issue: { comments: { nodes: Array<{ body: string }> } };
-      }>(
-        `query($id: String!) {
-          issue(id: $id) {
-            comments { nodes { body } }
-          }
-        }`,
-        { id: issueIdentifier },
+      const commentBodies = await pollUntil(
+        async () => {
+          const data = await linearGraphQL<{
+            issue: { comments: { nodes: Array<{ body: string }> } };
+          }>(
+            `query($id: String!) {
+              issue(id: $id) {
+                comments(first: 50) { nodes { body } }
+              }
+            }`,
+            { id: issueIdentifier },
+          );
+
+          const bodies = data.issue.comments.nodes.map((c) => c.body);
+          return bodies.includes("Integration test comment") ? bodies : undefined;
+        },
+        { timeoutMs: 5_000, intervalMs: 500 },
       );
 
-      const commentBodies = data.issue.comments.nodes.map((c) => c.body);
       expect(commentBodies).toContain("Integration test comment");
     }
   });
