@@ -163,7 +163,9 @@ describe.skipIf(!canRun)("tracker-linear (integration)", () => {
           { id: issueIdentifier },
         );
         issueUuid = data.issue.id;
-      } catch {}
+      } catch {
+        issueUuid = undefined;
+      }
     }
   }, 30_000);
 
@@ -296,8 +298,12 @@ describe.skipIf(!canRun)("tracker-linear (integration)", () => {
     );
     expect(completed).toBe(true);
 
-    const issue = await tracker.getIssue(issueIdentifier, project);
-    expect(issue.state).toBe("closed");
+    const closedState = await pollUntilEqual(
+      async () => (await tracker.getIssue(issueIdentifier, project)).state,
+      "closed",
+      { timeoutMs: 5_000, intervalMs: 500 },
+    );
+    expect(closedState).toBe("closed");
   });
 
   it("updateIssue reopens the issue", async () => {
@@ -311,7 +317,11 @@ describe.skipIf(!canRun)("tracker-linear (integration)", () => {
     );
     expect(completed).toBe(false);
 
-    const issue = await tracker.getIssue(issueIdentifier, project);
-    expect(issue.state).toBe("open");
+    const reopenedState = await pollUntilEqual(
+      async () => (await tracker.getIssue(issueIdentifier, project)).state,
+      "open",
+      { timeoutMs: 5_000, intervalMs: 500 },
+    );
+    expect(reopenedState).toBe("open");
   });
 });
