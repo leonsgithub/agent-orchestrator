@@ -51,6 +51,14 @@ export type { SessionManagerDeps } from "./session-manager.js";
 export { createLifecycleManager } from "./lifecycle-manager.js";
 export type { LifecycleManagerDeps } from "./lifecycle-manager.js";
 
+// Pipeline scanner — proactive CI/CD health monitor
+export { createPipelineScanner } from "./pipeline-scanner.js";
+export type { PipelineScannerDeps } from "./pipeline-scanner.js";
+
+// CI log parser — failure categorization
+export { parseCILog, isLikelyFlaky } from "./ci-log-parser.js";
+export type { ParsedCIFailure } from "./ci-log-parser.js";
+
 // Prompt builder — layered prompt composition
 export { buildPrompt, BASE_AGENT_PROMPT } from "./prompt-builder.js";
 export type { PromptBuildConfig } from "./prompt-builder.js";

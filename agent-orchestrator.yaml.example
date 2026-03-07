@@ -60,6 +60,30 @@ projects:
     # orchestratorRules: |
     #   Prefer to batch-spawn related issues together.
 
+    # Pipeline scanner — proactive CI/CD health monitoring
+    # pipelineScanner:
+    #   enabled: true
+    #   interval: 300          # seconds (5 min)
+    #   autoRebase:
+    #     enabled: true
+    #     onlyFastForward: true
+    #   autoFix:
+    #     enabled: true
+    #     maxRetries: 2
+    #     categories:
+    #       merge-conflict: spawn-fix-agent
+    #       base-drift: auto-rebase
+    #       lint-failure: spawn-fix-agent
+    #       type-error: spawn-fix-agent
+    #       test-failure: spawn-fix-agent
+    #       build-failure: spawn-fix-agent
+    #       dependency-conflict: spawn-fix-agent
+    #       flaky-test: retry-ci
+    #       infra-failure: retry-ci
+    #   escalation:
+    #     afterRetries: 2
+    #     notifyChannel: null
+
     # Per-project reaction overrides
     # reactions:
     #   approved-and-green:
