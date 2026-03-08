@@ -18,6 +18,7 @@ import {
   resolveProject,
   enrichSessionPR,
   enrichSessionAgentSummary,
+  enrichSessionIssue,
   enrichSessionIssueTitle,
   enrichSessionsMetadata,
   computeStats,
@@ -712,6 +713,64 @@ describe("enrichSessionIssueTitle", () => {
 
     expect(tracker.getIssue).toHaveBeenCalledTimes(1);
     expect(dashboard2.issueTitle).toBe("Add user authentication");
+  });
+});
+
+describe("enrichSessionIssue", () => {
+  function makeProject(overrides?: Partial<ProjectConfig>): ProjectConfig {
+    return {
+      name: "test",
+      repo: "test/repo",
+      path: "/test",
+      defaultBranch: "main",
+      sessionPrefix: "test",
+      ...overrides,
+    };
+  }
+
+  function makeTracker(): Tracker {
+    return {
+      name: "mock",
+      getIssue: vi.fn().mockResolvedValue({ id: "137", title: "Bug", description: "", url: "", state: "open", labels: [] }),
+      isCompleted: vi.fn().mockResolvedValue(false),
+      issueUrl: vi.fn().mockReturnValue("https://github.com/test/repo/issues/137"),
+      issueLabel: vi.fn().mockReturnValue("#137"),
+      branchName: vi.fn().mockReturnValue("feat/issue-137"),
+      generatePrompt: vi.fn().mockResolvedValue("prompt"),
+    };
+  }
+
+  it("should convert raw issueId to a full URL when issueUrl is not a URL", () => {
+    const dashboard = {
+      id: "s1", projectId: "test", status: "working" as const, activity: "active" as const,
+      branch: null, issueId: "137", issueUrl: "137", issueLabel: null, issueTitle: null,
+      summary: null, summaryIsFallback: false, createdAt: "", lastActivityAt: "", pr: null, metadata: {},
+    };
+    const tracker = makeTracker();
+    const project = makeProject();
+
+    enrichSessionIssue(dashboard, tracker, project);
+
+    expect(tracker.issueUrl).toHaveBeenCalledWith("137", project);
+    expect(dashboard.issueUrl).toBe("https://github.com/test/repo/issues/137");
+    expect(dashboard.issueLabel).toBe("#137");
+  });
+
+  it("should not re-convert issueUrl when it is already a full URL", () => {
+    const dashboard = {
+      id: "s1", projectId: "test", status: "working" as const, activity: "active" as const,
+      branch: null, issueId: "137", issueUrl: "https://github.com/test/repo/issues/137",
+      issueLabel: null, issueTitle: null,
+      summary: null, summaryIsFallback: false, createdAt: "", lastActivityAt: "", pr: null, metadata: {},
+    };
+    const tracker = makeTracker();
+    const project = makeProject();
+
+    enrichSessionIssue(dashboard, tracker, project);
+
+    expect(tracker.issueUrl).not.toHaveBeenCalled();
+    expect(dashboard.issueUrl).toBe("https://github.com/test/repo/issues/137");
+    expect(dashboard.issueLabel).toBe("#137");
   });
 });
 
