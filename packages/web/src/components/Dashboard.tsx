@@ -32,7 +32,23 @@ interface DashboardProps {
   projectIds?: string[];
 }
 
-type Tab = "board" | "backlog" | "verify" | "prs";
+type Tab = "board" | "backlog" | "verify" | "prs" | "pipeline";
+
+interface PipelineFindingUI {
+  id: string;
+  projectId: string;
+  prNumber: number;
+  prUrl: string;
+  branch: string;
+  category: string;
+  message: string;
+  action: string;
+  actionStatus: string;
+  attempts: number;
+  detectedAt: string;
+  lastAttemptAt: string | null;
+  fixSessionId: string | null;
+}
 
 const KANBAN_LEVELS = ["working", "pending", "review", "respond", "merge"] as const;
 
@@ -45,6 +61,8 @@ export function Dashboard({ initialSessions, stats, orchestratorId, projectName,
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [verifyIssues, setVerifyIssues] = useState<BacklogIssue[]>([]);
   const [verifyLoading, setVerifyLoading] = useState(false);
+  const [pipelineFindings, setPipelineFindings] = useState<PipelineFindingUI[]>([]);
+  const [pipelineLoading, setPipelineLoading] = useState(false);
 
   const grouped = useMemo(() => {
     const zones: Record<AttentionLevel, DashboardSession[]> = {
@@ -99,6 +117,30 @@ export function Dashboard({ initialSessions, stats, orchestratorId, projectName,
       setVerifyLoading(false);
     }
   }, []);
+
+  // Fetch pipeline findings
+  const fetchPipeline = useCallback(async () => {
+    setPipelineLoading(true);
+    try {
+      const res = await fetch("/api/pipeline");
+      if (res.ok) {
+        const data = await res.json();
+        setPipelineFindings(data.findings ?? []);
+      }
+    } catch {
+      // Non-critical
+    } finally {
+      setPipelineLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeTab === "pipeline") {
+      fetchPipeline();
+      const interval = setInterval(fetchPipeline, 30_000);
+      return () => clearInterval(interval);
+    }
+  }, [activeTab, fetchPipeline]);
 
   useEffect(() => {
     if (activeTab === "verify") {
@@ -182,6 +224,7 @@ export function Dashboard({ initialSessions, stats, orchestratorId, projectName,
   const backlogCount = backlogIssues.length;
   const verifyCount = verifyIssues.length;
   const prCount = openPRs.length;
+  const pipelineCount = pipelineFindings.filter((f) => f.actionStatus !== "succeeded").length;
   const needsAttention = grouped.respond.length + grouped.merge.length;
 
   return (
@@ -225,6 +268,9 @@ export function Dashboard({ initialSessions, stats, orchestratorId, projectName,
         </TabButton>
         <TabButton active={activeTab === "prs"} onClick={() => setActiveTab("prs")} badge={prCount > 0 ? prCount : undefined} badgeColor="var(--color-status-ready)">
           Pull Requests
+        </TabButton>
+        <TabButton active={activeTab === "pipeline"} onClick={() => setActiveTab("pipeline")} badge={pipelineCount > 0 ? pipelineCount : undefined} badgeColor="var(--color-status-attention)">
+          Pipeline
         </TabButton>
       </div>
 
@@ -403,6 +449,61 @@ export function Dashboard({ initialSessions, stats, orchestratorId, projectName,
             <EmptyState title="No open PRs" description="Agents will create PRs when they push code" />
           )}
         </>
+      )}
+
+      {/* Pipeline tab */}
+      {activeTab === "pipeline" && (
+        <div>
+          <div className="mb-4 flex items-center justify-between">
+            <p className="text-[12px] text-[var(--color-text-secondary)]">
+              Proactive scanning of all open PRs for merge conflicts, CI failures, and base-branch drift.
+            </p>
+            <button
+              onClick={() => {
+                setPipelineLoading(true);
+                fetch("/api/pipeline", { method: "POST" })
+                  .then((res) => res.json())
+                  .then((data) => setPipelineFindings(data.findings ?? []))
+                  .finally(() => setPipelineLoading(false));
+              }}
+              disabled={pipelineLoading}
+              className="flex items-center gap-1.5 rounded-md bg-[var(--color-accent)] px-3 py-1.5 text-[12px] font-semibold text-[var(--color-text-inverse)] hover:opacity-90 disabled:opacity-50"
+            >
+              {pipelineLoading ? "Scanning..." : "Scan Now"}
+            </button>
+          </div>
+
+          {pipelineLoading && pipelineFindings.length === 0 ? (
+            <div className="py-12 text-center text-[12px] text-[var(--color-text-tertiary)]">Scanning pipelines...</div>
+          ) : pipelineFindings.length === 0 ? (
+            <EmptyState
+              title="All pipelines healthy"
+              description="No issues detected across open PRs"
+            />
+          ) : (
+            <div className="mx-auto max-w-[900px]">
+              <div className="overflow-hidden rounded-[6px] border border-[var(--color-border-default)]">
+                <table className="w-full border-collapse">
+                  <thead>
+                    <tr className="border-b border-[var(--color-border-muted)]">
+                      <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">PR</th>
+                      <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">Category</th>
+                      <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">Message</th>
+                      <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">Action</th>
+                      <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">Status</th>
+                      <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">Attempts</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pipelineFindings.map((finding) => (
+                      <PipelineRow key={finding.id} finding={finding} />
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
       )}
     </div>
   );
@@ -634,6 +735,70 @@ function CreateIssueForm({ projectIds, onCreated, onCancel }: { projectIds: stri
         </div>
       </div>
     </form>
+  );
+}
+
+const CATEGORY_COLORS: Record<string, string> = {
+  "merge-conflict": "var(--color-status-error)",
+  "base-drift": "rgb(245, 158, 11)",
+  "lint-failure": "var(--color-status-attention)",
+  "type-error": "var(--color-status-error)",
+  "test-failure": "var(--color-status-error)",
+  "build-failure": "var(--color-status-error)",
+  "dependency-conflict": "var(--color-status-attention)",
+  "flaky-test": "rgb(245, 158, 11)",
+  "infra-failure": "var(--color-text-secondary)",
+  "unknown": "var(--color-text-secondary)",
+};
+
+const STATUS_LABELS: Record<string, { label: string; color: string }> = {
+  pending: { label: "pending", color: "var(--color-text-secondary)" },
+  dispatched: { label: "dispatched", color: "var(--color-accent)" },
+  succeeded: { label: "fixed", color: "var(--color-status-ready)" },
+  failed: { label: "failed", color: "var(--color-status-error)" },
+  escalated: { label: "escalated", color: "var(--color-status-error)" },
+};
+
+function PipelineRow({ finding }: { finding: PipelineFindingUI }) {
+  const catColor = CATEGORY_COLORS[finding.category] ?? "var(--color-text-secondary)";
+  const statusInfo = STATUS_LABELS[finding.actionStatus] ?? STATUS_LABELS.pending;
+
+  return (
+    <tr className="border-b border-[var(--color-border-muted)] last:border-b-0 hover:bg-[var(--color-bg-subtle)]">
+      <td className="px-3 py-2.5 text-[12px]">
+        <a
+          href={finding.prUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="font-semibold text-[var(--color-accent)] hover:underline"
+        >
+          #{finding.prNumber}
+        </a>
+        <div className="mt-0.5 text-[10px] text-[var(--color-text-tertiary)]">{finding.projectId}</div>
+      </td>
+      <td className="px-3 py-2.5">
+        <span
+          className="inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold"
+          style={{ color: catColor, backgroundColor: `color-mix(in srgb, ${catColor} 12%, transparent)` }}
+        >
+          {finding.category}
+        </span>
+      </td>
+      <td className="max-w-[300px] truncate px-3 py-2.5 text-[12px] text-[var(--color-text-primary)]">
+        {finding.message}
+      </td>
+      <td className="px-3 py-2.5 text-[11px] text-[var(--color-text-secondary)]">
+        {finding.action}
+      </td>
+      <td className="px-3 py-2.5">
+        <span className="text-[11px] font-semibold" style={{ color: statusInfo.color }}>
+          {statusInfo.label}
+        </span>
+      </td>
+      <td className="px-3 py-2.5 text-[12px] tabular-nums text-[var(--color-text-secondary)]">
+        {finding.attempts}
+      </td>
+    </tr>
   );
 }
 

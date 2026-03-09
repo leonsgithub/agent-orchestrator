@@ -912,6 +912,9 @@ export interface ProjectConfig {
   /** Rules for the orchestrator agent (stored, reserved for future use) */
   orchestratorRules?: string;
 
+  /** Pipeline scanner configuration */
+  pipelineScanner?: Partial<PipelineScannerConfig>;
+
   /** Task decomposition configuration */
   decomposer?: {
     /** Enable auto-decomposition for backlog issues (default: false) */
@@ -1120,6 +1123,146 @@ export function isIssueNotFoundError(err: unknown): boolean {
     message.includes("invalid issue format")
   );
 }
+
+// =============================================================================
+// PIPELINE SCANNER
+// =============================================================================
+
+/** CI failure category for automated triage */
+export type CIFailureCategory =
+  | "merge-conflict"
+  | "base-drift"
+  | "lint-failure"
+  | "type-error"
+  | "test-failure"
+  | "build-failure"
+  | "dependency-conflict"
+  | "flaky-test"
+  | "infra-failure"
+  | "unknown";
+
+/** Action the scanner can dispatch for a detected issue */
+export type PipelineFixAction =
+  | "auto-rebase"
+  | "spawn-fix-agent"
+  | "retry-ci"
+  | "notify-human";
+
+/** A single finding from the pipeline scanner */
+export interface PipelineFinding {
+  /** Unique ID for this finding */
+  id: string;
+  /** Which project this finding belongs to */
+  projectId: string;
+  /** PR number */
+  prNumber: number;
+  /** PR URL */
+  prUrl: string;
+  /** PR branch */
+  branch: string;
+  /** Category of the issue */
+  category: CIFailureCategory;
+  /** Human-readable description */
+  message: string;
+  /** What action was dispatched (or will be) */
+  action: PipelineFixAction;
+  /** Whether the action was executed or is pending */
+  actionStatus: "pending" | "dispatched" | "succeeded" | "failed" | "escalated";
+  /** Relevant file paths extracted from CI logs */
+  filePaths: string[];
+  /** Error output snippet (truncated) */
+  errorSnippet: string;
+  /** How many fix attempts have been made */
+  attempts: number;
+  /** When this finding was first detected */
+  detectedAt: Date;
+  /** When the last fix attempt was made */
+  lastAttemptAt: Date | null;
+  /** Session ID if a fix agent was spawned */
+  fixSessionId: string | null;
+}
+
+/** Pipeline scanner configuration (per-project) */
+export interface PipelineScannerConfig {
+  /** Whether the scanner is enabled for this project */
+  enabled: boolean;
+  /** Scan interval in seconds (default: 300 = 5min) */
+  interval: number;
+  /** Auto-rebase configuration */
+  autoRebase: {
+    enabled: boolean;
+    /** Only rebase if fast-forward is possible (default: true) */
+    onlyFastForward: boolean;
+  };
+  /** Auto-fix configuration */
+  autoFix: {
+    enabled: boolean;
+    /** Max fix attempts per failure before escalation (default: 2) */
+    maxRetries: number;
+    /** Category-to-action mapping */
+    categories: Partial<Record<CIFailureCategory, PipelineFixAction>>;
+  };
+  /** Escalation configuration */
+  escalation: {
+    /** Escalate to human after this many retries (default: 2) */
+    afterRetries: number;
+    /** Optional notification channel */
+    notifyChannel: string | null;
+  };
+}
+
+/** Default pipeline scanner config */
+export const DEFAULT_PIPELINE_SCANNER_CONFIG: PipelineScannerConfig = {
+  enabled: false,
+  interval: 300,
+  autoRebase: { enabled: true, onlyFastForward: true },
+  autoFix: {
+    enabled: true,
+    maxRetries: 2,
+    categories: {
+      "merge-conflict": "spawn-fix-agent",
+      "base-drift": "auto-rebase",
+      "lint-failure": "spawn-fix-agent",
+      "type-error": "spawn-fix-agent",
+      "test-failure": "spawn-fix-agent",
+      "build-failure": "spawn-fix-agent",
+      "dependency-conflict": "spawn-fix-agent",
+      "flaky-test": "retry-ci",
+      "infra-failure": "retry-ci",
+    },
+  },
+  escalation: { afterRetries: 2, notifyChannel: null },
+};
+
+/** Extended SCM interface methods for pipeline scanning */
+export interface SCMPipelineExtensions {
+  /** List all open PRs for a project */
+  listOpenPRs?(project: ProjectConfig): Promise<PRInfo[]>;
+  /** Get CI run logs for a PR (returns raw log text) */
+  getCIRunLogs?(pr: PRInfo): Promise<string>;
+  /** Re-trigger CI for a PR */
+  retriggerCI?(pr: PRInfo): Promise<void>;
+  /** Get the base branch HEAD SHA for drift detection */
+  getBaseBranchSHA?(pr: PRInfo, project: ProjectConfig): Promise<string>;
+}
+
+/** Pipeline scanner service interface */
+export interface PipelineScanner {
+  /** Start the scanning loop */
+  start(): void;
+  /** Stop the scanning loop */
+  stop(): void;
+  /** Run a single scan cycle (for manual triggering) */
+  scanOnce(): Promise<PipelineFinding[]>;
+  /** Get all current findings */
+  getFindings(): PipelineFinding[];
+  /** Get findings for a specific project */
+  getFindingsForProject(projectId: string): PipelineFinding[];
+}
+
+// =============================================================================
+// ERROR CLASSES
+// =============================================================================
 
 /** Thrown when a session cannot be restored (e.g. merged, still working). */
 export class SessionNotRestorableError extends Error {

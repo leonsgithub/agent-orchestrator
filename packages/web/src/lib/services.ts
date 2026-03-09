@@ -15,6 +15,7 @@ import {
   createPluginRegistry,
   createSessionManager,
   createLifecycleManager,
+  createPipelineScanner,
   decompose,
   getLeaves,
   getSiblings,
@@ -23,6 +24,8 @@ import {
   type PluginRegistry,
   type SessionManager,
   type LifecycleManager,
+  type PipelineScanner,
+  type PipelineFinding,
   type SCM,
   type ProjectConfig,
   type Tracker,
@@ -46,6 +49,7 @@ export interface Services {
   registry: PluginRegistry;
   sessionManager: SessionManager;
   lifecycleManager: LifecycleManager;
+  pipelineScanner: PipelineScanner;
 }
 
 // Cache in globalThis for Next.js HMR stability
@@ -89,7 +93,11 @@ async function initServices(): Promise<Services> {
   const lifecycleManager = createLifecycleManager({ config, registry, sessionManager });
   lifecycleManager.start(30_000);
 
-  const services = { config, registry, sessionManager, lifecycleManager };
+  // Start the pipeline scanner — proactively scans all open PRs for issues
+  const pipelineScanner = createPipelineScanner({ config, registry, sessionManager });
+  pipelineScanner.start();
+
+  const services = { config, registry, sessionManager, lifecycleManager, pipelineScanner };
   globalForServices._aoServices = services;
   return services;
 }
@@ -378,5 +386,15 @@ export async function getVerifyIssues(): Promise<Array<Issue & { projectId: stri
 export function getSCM(registry: PluginRegistry, project: ProjectConfig | undefined): SCM | null {
   if (!project?.scm) return null;
   return registry.get<SCM>("scm", project.scm.plugin);
+}
+
+/** Get pipeline scanner findings across all projects (for dashboard). */
+export async function getPipelineFindings(): Promise<PipelineFinding[]> {
+  try {
+    const { pipelineScanner } = await getServices();
+    return pipelineScanner.getFindings();
+  } catch {
+    return [];
+  }
 }
 

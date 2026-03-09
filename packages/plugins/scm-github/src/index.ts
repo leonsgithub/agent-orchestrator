@@ -10,6 +10,7 @@ import {
   CI_STATUS,
   type PluginModule,
   type SCM,
+  type SCMPipelineExtensions,
   type Session,
   type ProjectConfig,
   type PRInfo,
@@ -124,7 +125,7 @@ function prInfoFromView(
 // SCM implementation
 // ---------------------------------------------------------------------------
 
-function createGitHubSCM(): SCM {
+function createGitHubSCM(): SCM & SCMPipelineExtensions {
   return {
     name: "github",
 
@@ -642,6 +643,102 @@ function createGitHubSCM(): SCM {
         blockers,
       };
     },
+
+    // --- Pipeline Scanner Extensions ---
+
+    async listOpenPRs(project: ProjectConfig): Promise<PRInfo[]> {
+      const raw = await gh([
+        "pr",
+        "list",
+        "--repo",
+        project.repo,
+        "--state",
+        "open",
+        "--json",
+        "number,url,title,headRefName,baseRefName,isDraft",
+        "--limit",
+        "50",
+      ]);
+
+      const prs: Array<{
+        number: number;
+        url: string;
+        title: string;
+        headRefName: string;
+        baseRefName: string;
+        isDraft: boolean;
+      }> = JSON.parse(raw);
+
+      return prs.map((data) => prInfoFromView(data, project.repo));
+    },
+
+    async getCIRunLogs(pr: PRInfo): Promise<string> {
+      // Get the latest workflow run for this PR's head branch
+      const runsRaw = await gh([
+        "api",
+        `repos/${repoFlag(pr)}/actions/runs`,
+        "-q",
+        ".workflow_runs[0].id",
+        "-F",
+        `branch=${pr.branch}`,
+        "-F",
+        "status=completed",
+        "-F",
+        "per_page=1",
+      ]);
+
+      const runId = runsRaw.trim();
+      if (!runId || runId === "null") {
+        throw new Error("No completed workflow run found");
+      }
+
+      // Get the failed job logs
+      const jobsRaw = await gh([
+        "api",
+        `repos/${repoFlag(pr)}/actions/runs/${runId}/jobs`,
+        "-q",
+        '.jobs[] | select(.conclusion == "failure") | .id',
+      ]);
+
+      const failedJobId = jobsRaw.trim().split("\n")[0];
+      if (!failedJobId) {
+        throw new Error("No failed job found in run");
+      }
+
+      // Fetch the job log
+      const log = await gh([
+        "api",
+        `repos/${repoFlag(pr)}/actions/jobs/${failedJobId}/logs`,
+      ]);
+
+      return log;
+    },
+
+    async retriggerCI(pr: PRInfo): Promise<void> {
+      // Get the latest workflow run for this PR
+      const runsRaw = await gh([
+        "api",
+        `repos/${repoFlag(pr)}/actions/runs`,
+        "-q",
+        ".workflow_runs[0].id",
+        "-F",
+        `branch=${pr.branch}`,
+        "-F",
+        "per_page=1",
+      ]);
+
+      const runId = runsRaw.trim();
+      if (!runId || runId === "null") {
+        throw new Error("No workflow run found to retrigger");
+      }
+
+      await gh([
+        "api",
+        "--method",
+        "POST",
+        `repos/${repoFlag(pr)}/actions/runs/${runId}/rerun-failed-jobs`,
+      ]);
+    },
   };
 }
 
@@ -656,8 +753,8 @@ export const manifest = {
   version: "0.1.0",
 };
 
-export function create(): SCM {
+export function create(): SCM & SCMPipelineExtensions {
   return createGitHubSCM();
 }
 
-export default { manifest, create } satisfies PluginModule<SCM>;
+export default { manifest, create } satisfies PluginModule<SCM & SCMPipelineExtensions>;

@@ -260,6 +260,16 @@ export function enrichSessionIssue(
 ): void {
   if (!dashboard.issueUrl) return;
 
+  // issueUrl is stored as the raw issueId (e.g. "137"). Convert it to a full
+  // URL if it isn't one already (i.e. doesn't start with "http").
+  if (!dashboard.issueUrl.startsWith("http")) {
+    try {
+      dashboard.issueUrl = tracker.issueUrl(dashboard.issueUrl, project);
+    } catch {
+      // Keep the raw value if conversion fails
+    }
+  }
+
   // Use tracker plugin to extract human-readable label from URL
   if (tracker.issueLabel) {
     try {
