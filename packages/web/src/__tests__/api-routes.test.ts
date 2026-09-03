@@ -145,13 +145,19 @@ const mockConfig: OrchestratorConfig = {
   reactions: {},
 };
 
+const mockLifecycleManager = {
+  getStates: () => new Map<string, string>(),
+};
+
 vi.mock("@/lib/services", () => ({
   getServices: vi.fn(async () => ({
     config: mockConfig,
     registry: mockRegistry,
     sessionManager: mockSessionManager,
+    lifecycleManager: mockLifecycleManager,
   })),
   getSCM: vi.fn(() => mockSCM),
+  startBacklogPoller: vi.fn(),
 }));
 
 // ── Import routes after mocking ───────────────────────────────────────
