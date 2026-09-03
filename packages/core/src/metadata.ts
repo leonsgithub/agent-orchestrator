@@ -74,6 +74,30 @@ function atomicWriteFileSync(filePath: string, content: string): void {
   renameSync(tmpPath, filePath);
 }
 
+/**
+ * Keys that map onto typed `SessionMetadata` fields. Anything else in the file
+ * is carried through `SessionMetadata.extra` so a full write does not drop it.
+ */
+const KNOWN_METADATA_KEYS = new Set([
+  "worktree",
+  "branch",
+  "status",
+  "tmuxName",
+  "issue",
+  "pr",
+  "prAutoDetect",
+  "summary",
+  "project",
+  "agent",
+  "createdAt",
+  "runtimeHandle",
+  "restoredAt",
+  "role",
+  "dashboardPort",
+  "terminalWsPort",
+  "directTerminalWsPort",
+]);
+
 /** Validate sessionId to prevent path traversal. */
 const VALID_SESSION_ID = /^[a-zA-Z0-9_-]+$/;
 
@@ -99,7 +123,13 @@ export function readMetadata(dataDir: string, sessionId: SessionId): SessionMeta
   const content = readFileSync(path, "utf-8");
   const raw = parseMetadataFile(content);
 
+  const extra: Record<string, string> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (!KNOWN_METADATA_KEYS.has(key)) extra[key] = value;
+  }
+
   return {
+    extra: Object.keys(extra).length > 0 ? extra : undefined,
     worktree: raw["worktree"] ?? "",
     branch: raw["branch"] ?? "",
     status: raw["status"] ?? "unknown",
@@ -151,6 +181,11 @@ export function writeMetadata(
     branch: metadata.branch,
     status: metadata.status,
   };
+
+  // Subsystem-owned keys first, so a typed field always wins on collision.
+  for (const [key, value] of Object.entries(metadata.extra ?? {})) {
+    if (!KNOWN_METADATA_KEYS.has(key) && value !== "") data[key] = value;
+  }
 
   if (metadata.tmuxName) data["tmuxName"] = metadata.tmuxName;
   if (metadata.issue) data["issue"] = metadata.issue;

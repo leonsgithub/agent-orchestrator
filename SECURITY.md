@@ -167,6 +167,13 @@ When setting up Agent Orchestrator:
 3. **Never commit local config**: It's in `.gitignore` — keep it there!
 4. **Use secret management**: Consider 1Password, AWS Secrets Manager, etc.
 
+### Before Sharing an Event Log
+
+`~/.agent-orchestrator/{hash}-{projectId}/events.jsonl` records every lifecycle event,
+including the `data` payload plugins attach to it — reaction messages, CI failure
+excerpts, PR and branch names. It is local-only and never transmitted, but it is not
+redacted. Read it before pasting one into an issue or support thread.
+
 ### Required Secrets
 
 Agent Orchestrator may require these secrets:

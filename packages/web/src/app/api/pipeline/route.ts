@@ -13,7 +13,7 @@ export async function GET() {
     }));
 
     return NextResponse.json({ findings: serialized });
-  } catch (err) {
+  } catch {
     return NextResponse.json(
       { error: "Failed to fetch pipeline findings" },
       { status: 500 },
@@ -34,7 +34,7 @@ export async function POST() {
     }));
 
     return NextResponse.json({ findings: serialized, scanned: true });
-  } catch (err) {
+  } catch {
     return NextResponse.json(
       { error: "Failed to run pipeline scan" },
       { status: 500 },

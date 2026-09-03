@@ -7,7 +7,6 @@ import {
   type PluginRegistry,
   loadConfig,
 } from "@composio/ao-core";
-import { getSessionManager } from "../lib/create-session-manager.js";
 
 /**
  * Resolve the target project from config.

@@ -1086,7 +1086,9 @@ export function createSessionManager(deps: SessionManagerDeps): SessionManager {
         return restored;
       } catch (err) {
         const detail = err instanceof Error ? err.message : String(err);
-        throw new Error(`Cannot send to session ${sessionId}: ${reason} (${detail})`, { cause: err });
+        throw new Error(`Cannot send to session ${sessionId}: ${reason} (${detail})`, {
+          cause: err,
+        });
       }
     };
 
@@ -1107,7 +1109,9 @@ export function createSessionManager(deps: SessionManagerDeps): SessionManager {
 
       if (forceRestore || isRestorable(normalized)) {
         return restoreForDelivery(
-          forceRestore ? "session needed to be restarted before delivery" : "session is not running",
+          forceRestore
+            ? "session needed to be restarted before delivery"
+            : "session is not running",
           normalized,
         );
       }
@@ -1170,8 +1174,7 @@ export function createSessionManager(deps: SessionManagerDeps): SessionManager {
       await sendWithConfirmation(prepared);
     } catch (err) {
       const shouldRetryWithRestore =
-        prepared.restoredAt === undefined &&
-        !NON_RESTORABLE_STATUSES.has(prepared.status);
+        prepared.restoredAt === undefined && !NON_RESTORABLE_STATUSES.has(prepared.status);
 
       if (!shouldRetryWithRestore) {
         if (err instanceof Error) {
@@ -1352,6 +1355,9 @@ export function createSessionManager(deps: SessionManagerDeps): SessionManager {
         project: raw["project"],
         createdAt: raw["createdAt"],
         runtimeHandle: raw["runtimeHandle"],
+        // Carry subsystem-owned keys (reaction budgets, review fingerprints)
+        // through the archive round-trip — writeMetadata drops what it isn't given.
+        extra: raw,
       });
     }
 

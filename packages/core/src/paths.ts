@@ -111,6 +111,17 @@ export function getArchiveDir(configPath: string, projectPath: string): string {
 }
 
 /**
+ * Get the event log path for a project.
+ * Format: ~/.agent-orchestrator/{hash}-{projectId}/events.jsonl
+ *
+ * Deliberately a sibling of `sessions/` rather than a child: the log outlives
+ * the sessions it describes and must not be removed by session cleanup.
+ */
+export function getEventLogPath(configPath: string, projectPath: string): string {
+  return join(getProjectBaseDir(configPath, projectPath), "events.jsonl");
+}
+
+/**
  * Get the .origin file path for a project.
  * This file stores the config path for collision detection.
  */

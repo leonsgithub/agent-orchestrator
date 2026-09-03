@@ -462,3 +462,53 @@ describe("listMetadata", () => {
     // no cleanup needed since dir was never created
   });
 });
+
+describe("subsystem-owned keys (extra)", () => {
+  it("reads unrecognized keys into extra", () => {
+    writeFileSync(
+      join(dataDir, "app-1"),
+      "worktree=/tmp\nbranch=main\nstatus=working\nreaction.ci-failed.attempts=2\n",
+      "utf-8",
+    );
+
+    const meta = readMetadata(dataDir, "app-1");
+    expect(meta!.extra).toEqual({ "reaction.ci-failed.attempts": "2" });
+  });
+
+  it("leaves extra undefined when there are no unrecognized keys", () => {
+    writeMetadata(dataDir, "app-1", { worktree: "/tmp", branch: "main", status: "working" });
+    expect(readMetadata(dataDir, "app-1")!.extra).toBeUndefined();
+  });
+
+  it("writeMetadata does not clobber reaction state", () => {
+    updateMetadata(dataDir, "app-1", {
+      worktree: "/tmp",
+      branch: "main",
+      status: "ci_failed",
+      "reaction.ci-failed.attempts": "2",
+      "reaction.ci-failed.firstTriggered": "2026-09-03T10:00:00.000Z",
+    });
+
+    const before = readMetadata(dataDir, "app-1")!;
+    // A full rewrite — the restore-from-archive path does exactly this.
+    writeMetadata(dataDir, "app-1", { ...before, status: "working" });
+
+    const after = readMetadataRaw(dataDir, "app-1")!;
+    expect(after["reaction.ci-failed.attempts"]).toBe("2");
+    expect(after["reaction.ci-failed.firstTriggered"]).toBe("2026-09-03T10:00:00.000Z");
+    expect(after["status"]).toBe("working");
+  });
+
+  it("a typed field wins over a colliding extra key", () => {
+    writeMetadata(dataDir, "app-1", {
+      worktree: "/tmp",
+      branch: "main",
+      status: "working",
+      extra: { status: "stale", "reaction.x.attempts": "1" },
+    });
+
+    const raw = readMetadataRaw(dataDir, "app-1")!;
+    expect(raw["status"]).toBe("working");
+    expect(raw["reaction.x.attempts"]).toBe("1");
+  });
+});

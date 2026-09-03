@@ -34,7 +34,14 @@ import {
   type ProjectConfig as _ProjectConfig,
 } from "./types.js";
 import { updateMetadata } from "./metadata.js";
-import { getSessionsDir } from "./paths.js";
+import { getEventLogPath, getSessionsDir } from "./paths.js";
+import { appendEvent } from "./event-log.js";
+import {
+  clearReactionBudget,
+  readReactionBudget,
+  writeReactionBudget,
+  type ReactionBudget,
+} from "./reaction-state.js";
 
 /** Parse a duration string like "10m", "30s", "1h" to milliseconds. */
 function parseDuration(str: string): number {
@@ -168,21 +175,47 @@ export interface LifecycleManagerDeps {
   projectId?: string;
 }
 
-/** Track attempt counts for reactions per session. */
-interface ReactionTracker {
-  attempts: number;
-  firstTriggered: Date;
-}
-
 /** Create a LifecycleManager instance. */
 export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleManager {
   const { config, registry, sessionManager, projectId: scopedProjectId } = deps;
 
   const states = new Map<SessionId, SessionStatus>();
-  const reactionTrackers = new Map<string, ReactionTracker>(); // "sessionId:reactionKey"
+  // In-memory cache over the budgets persisted in session metadata. Keyed
+  // "sessionId:reactionKey". Metadata is the source of truth; this only saves a
+  // file read per poll.
+  const reactionTrackers = new Map<string, ReactionBudget>();
   let pollTimer: ReturnType<typeof setInterval> | null = null;
   let polling = false; // re-entrancy guard
   let allCompleteEmitted = false; // guard against repeated all_complete
+
+  /** Sessions directory for a project, or null if the project isn't configured. */
+  function sessionsDirFor(projectId: string): string | null {
+    const project = config.projects[projectId];
+    if (!project) return null;
+    return getSessionsDir(config.configPath, project.path);
+  }
+
+  /**
+   * Append an event to the durable log.
+   *
+   * Events carrying a real projectId go to that project's log. The synthetic
+   * "all" projectId used by summary.all_complete goes to every project this
+   * manager polls, so the summary is visible from any project's history.
+   */
+  function recordEvent(event: OrchestratorEvent): void {
+    const projectIds =
+      config.projects[event.projectId] !== undefined
+        ? [event.projectId]
+        : scopedProjectId
+          ? [scopedProjectId]
+          : Object.keys(config.projects);
+
+    for (const projectId of projectIds) {
+      const project = config.projects[projectId];
+      if (!project) continue;
+      appendEvent(getEventLogPath(config.configPath, project.path), event);
+    }
+  }
 
   /** Determine current status for a session by polling plugins. */
   async function determineStatus(session: Session): Promise<SessionStatus> {
@@ -305,15 +338,29 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
     reactionConfig: ReactionConfig,
   ): Promise<ReactionResult> {
     const trackerKey = `${sessionId}:${reactionKey}`;
-    let tracker = reactionTrackers.get(trackerKey);
+    const sessionsDir = sessionsDirFor(projectId);
 
-    if (!tracker) {
-      tracker = { attempts: 0, firstTriggered: new Date() };
+    // Session metadata is the source of truth, re-read on every firing rather
+    // than cached. Reactions fire only on transitions, so this is a handful of
+    // small reads per hour, and it buys two things: a restarted orchestrator
+    // resumes the count instead of handing out a fresh budget, and `ao reaction
+    // reset` takes effect against an orchestrator running in another process.
+    // The in-memory map is only the fallback for events with no session on disk
+    // (the synthetic "all" project used by summary.all_complete).
+    const tracker = (sessionsDir
+      ? readReactionBudget(sessionsDir, sessionId, reactionKey)
+      : null) ??
+      reactionTrackers.get(trackerKey) ?? { attempts: 0, firstTriggered: new Date() };
+
+    // Increment attempts before checking escalation. This counter is per session
+    // lifetime: it is NOT reset when the session moves out of the triggering
+    // status, because that movement is what an in-progress repair looks like.
+    tracker.attempts++;
+    if (sessionsDir) {
+      writeReactionBudget(sessionsDir, sessionId, reactionKey, tracker);
+    } else {
       reactionTrackers.set(trackerKey, tracker);
     }
-
-    // Increment attempts before checking escalation
-    tracker.attempts++;
 
     // Check if we should escalate
     const maxRetries = reactionConfig.retries ?? Infinity;
@@ -424,8 +471,23 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
     };
   }
 
-  function clearReactionTracker(sessionId: SessionId, reactionKey: string): void {
+  /**
+   * Clear a reaction's budget, in memory and on disk.
+   *
+   * Only call this when the reaction's underlying condition is confirmed
+   * resolved — the session reached a terminal state, or the review comments that
+   * triggered it are gone. A status transition alone is not resolution: an agent
+   * pushing a CI fix moves the session out of `ci_failed` and straight back into
+   * it, and clearing here would reset the budget every cycle.
+   */
+  function clearReactionTracker(
+    sessionId: SessionId,
+    projectId: string,
+    reactionKey: string,
+  ): void {
     reactionTrackers.delete(`${sessionId}:${reactionKey}`);
+    const sessionsDir = sessionsDirFor(projectId);
+    if (sessionsDir) clearReactionBudget(sessionsDir, sessionId, reactionKey);
   }
 
   function getReactionConfigForSession(
@@ -441,10 +503,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
     return reactionConfig ? (reactionConfig as ReactionConfig) : null;
   }
 
-  function updateSessionMetadata(
-    session: Session,
-    updates: Partial<Record<string, string>>,
-  ): void {
+  function updateSessionMetadata(session: Session, updates: Partial<Record<string, string>>): void {
     const project = config.projects[session.projectId];
     if (!project) return;
 
@@ -484,8 +543,8 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
     const automatedReactionKey = "bugbot-comments";
 
     if (newStatus === "merged" || newStatus === "killed") {
-      clearReactionTracker(session.id, humanReactionKey);
-      clearReactionTracker(session.id, automatedReactionKey);
+      clearReactionTracker(session.id, session.projectId, humanReactionKey);
+      clearReactionTracker(session.id, session.projectId, automatedReactionKey);
       updateSessionMetadata(session, {
         lastPendingReviewFingerprint: "",
         lastPendingReviewDispatchHash: "",
@@ -529,7 +588,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
         pendingFingerprint !== lastPendingFingerprint &&
         transitionReaction?.key !== humanReactionKey
       ) {
-        clearReactionTracker(session.id, humanReactionKey);
+        clearReactionTracker(session.id, session.projectId, humanReactionKey);
       }
       if (pendingFingerprint !== lastPendingFingerprint) {
         updateSessionMetadata(session, {
@@ -538,7 +597,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
       }
 
       if (!pendingFingerprint) {
-        clearReactionTracker(session.id, humanReactionKey);
+        clearReactionTracker(session.id, session.projectId, humanReactionKey);
         updateSessionMetadata(session, {
           lastPendingReviewFingerprint: "",
           lastPendingReviewDispatchHash: "",
@@ -587,22 +646,19 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
       );
     }
     if (automatedComments !== null) {
-      const automatedFingerprint = makeFingerprint(
-        automatedComments.map((comment) => comment.id),
-      );
+      const automatedFingerprint = makeFingerprint(automatedComments.map((comment) => comment.id));
       const lastAutomatedFingerprint = session.metadata["lastAutomatedReviewFingerprint"] ?? "";
-      const lastAutomatedDispatchHash =
-        session.metadata["lastAutomatedReviewDispatchHash"] ?? "";
+      const lastAutomatedDispatchHash = session.metadata["lastAutomatedReviewDispatchHash"] ?? "";
 
       if (automatedFingerprint !== lastAutomatedFingerprint) {
-        clearReactionTracker(session.id, automatedReactionKey);
+        clearReactionTracker(session.id, session.projectId, automatedReactionKey);
         updateSessionMetadata(session, {
           lastAutomatedReviewFingerprint: automatedFingerprint,
         });
       }
 
       if (!automatedFingerprint) {
-        clearReactionTracker(session.id, automatedReactionKey);
+        clearReactionTracker(session.id, session.projectId, automatedReactionKey);
         updateSessionMetadata(session, {
           lastAutomatedReviewFingerprint: "",
           lastAutomatedReviewDispatchHash: "",
@@ -632,9 +688,19 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
     }
   }
 
-  /** Send a notification to all configured notifiers. */
-  async function notifyHuman(event: OrchestratorEvent, priority: EventPriority): Promise<void> {
+  /**
+   * Record an event and send it to all configured notifiers.
+   *
+   * Callers that have already recorded the event (transitions in `checkSession`)
+   * pass `record: false` so it is not logged twice.
+   */
+  async function notifyHuman(
+    event: OrchestratorEvent,
+    priority: EventPriority,
+    opts: { record?: boolean } = {},
+  ): Promise<void> {
     const eventWithPriority = { ...event, priority };
+    if (opts.record !== false) recordEvent(eventWithPriority);
     const notifierNames = config.notificationRouting[priority] ?? config.defaults.notifiers;
 
     for (const name of notifierNames) {
@@ -670,12 +736,15 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
         allCompleteEmitted = false;
       }
 
-      // Clear reaction trackers for the old status so retries reset on state changes
-      const oldEventType = statusToEventType(undefined, oldStatus);
-      if (oldEventType) {
-        const oldReactionKey = eventToReactionKey(oldEventType);
-        if (oldReactionKey) {
-          clearReactionTracker(session.id, oldReactionKey);
+      // Budgets are cleared only when the session is over. They deliberately
+      // survive movement out of the triggering status: an agent pushing a CI fix
+      // takes the session ci_failed → pr_open → ci_failed, and clearing on that
+      // transition reset the counter every cycle, so `retries` never escalated.
+      if (newStatus === "merged" || newStatus === "killed") {
+        const sessionsDir = sessionsDirFor(session.projectId);
+        if (sessionsDir) clearReactionBudget(sessionsDir, session.id);
+        for (const key of reactionTrackers.keys()) {
+          if (key.startsWith(`${session.id}:`)) reactionTrackers.delete(key);
         }
       }
 
@@ -707,18 +776,21 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
           }
         }
 
+        // Every transition is recorded, whether or not a human hears about it —
+        // the routine ones are what make a post-mortem readable. Notification is
+        // a separate decision made below.
+        const priority = inferPriority(eventType);
+        const event = createEvent(eventType, {
+          sessionId: session.id,
+          projectId: session.projectId,
+          message: `${session.id}: ${oldStatus} → ${newStatus}`,
+          data: { oldStatus, newStatus },
+        });
+        recordEvent(event);
+
         // For significant transitions not already notified by a reaction, notify humans
-        if (!reactionHandledNotify) {
-          const priority = inferPriority(eventType);
-          if (priority !== "info") {
-            const event = createEvent(eventType, {
-              sessionId: session.id,
-              projectId: session.projectId,
-              message: `${session.id}: ${oldStatus} → ${newStatus}`,
-              data: { oldStatus, newStatus },
-            });
-            await notifyHuman(event, priority);
-          }
+        if (!reactionHandledNotify && priority !== "info") {
+          await notifyHuman(event, priority, { record: false });
         }
       }
     } else {
@@ -811,6 +883,22 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
       const session = await sessionManager.get(sessionId);
       if (!session) throw new Error(`Session ${sessionId} not found`);
       await checkSession(session);
+    },
+
+    async resetReactions(sessionId: SessionId, reactionKey?: string): Promise<void> {
+      const session = await sessionManager.get(sessionId);
+      if (!session) throw new Error(`Session ${sessionId} not found`);
+
+      if (reactionKey) {
+        clearReactionTracker(sessionId, session.projectId, reactionKey);
+        return;
+      }
+
+      const sessionsDir = sessionsDirFor(session.projectId);
+      if (sessionsDir) clearReactionBudget(sessionsDir, sessionId);
+      for (const key of reactionTrackers.keys()) {
+        if (key.startsWith(`${sessionId}:`)) reactionTrackers.delete(key);
+      }
     },
   };
 }
