@@ -1,6 +1,6 @@
 # Design: Durable Lifecycle State
 
-**Status:** proposed
+**Status:** implemented (see `ao events`, `ao reaction`, `packages/core/src/{event-log,reaction-state}.ts`)
 **Scope:** `packages/core/src/lifecycle-manager.ts`, `metadata.ts`, `paths.ts`, `utils.ts`, `types.ts`; one CLI command; one web API route.
 **Estimated size:** ~2 days, two workstreams. Not a sprint's worth of work — see Non-Goals before adding to it.
 
@@ -15,17 +15,17 @@ depends on lives only in process memory, so it is either lost or silently reset.
 
 `reaction.escalated` is unreachable for `ci-failed` under normal operation.
 
-Reactions fire only on a status *transition* (`checkSession`, `lifecycle-manager.ts:663`).
+Reactions fire only on a status _transition_ (`checkSession`, `lifecycle-manager.ts:663`).
 Attempt counters live in an in-process `Map` (`lifecycle-manager.ts:182`) and are cleared
-whenever the session transitions *out of* the triggering status (`lifecycle-manager.ts:673-680`).
+whenever the session transitions _out of_ the triggering status (`lifecycle-manager.ts:673-680`).
 
 Those two rules are mutually exclusive. Trace the ordinary CI-fix loop:
 
-| Poll | Status | What happens |
-|------|--------|--------------|
-| 1 | `ci_failed` | transition → reaction fires, `attempts = 1` |
-| 2 | `review_pending` | agent pushed a fix; transition out of `ci_failed` → **tracker cleared** |
-| 3 | `ci_failed` | transition → reaction fires, `attempts = 1` again |
+| Poll | Status           | What happens                                                            |
+| ---- | ---------------- | ----------------------------------------------------------------------- |
+| 1    | `ci_failed`      | transition → reaction fires, `attempts = 1`                             |
+| 2    | `review_pending` | agent pushed a fix; transition out of `ci_failed` → **tracker cleared** |
+| 3    | `ci_failed`      | transition → reaction fires, `attempts = 1` again                       |
 
 `tracker.attempts > maxRetries` is never true. With the documented default
 `ci-failed: { retries: 2, escalateAfter: 2 }` the loop runs forever.
@@ -48,8 +48,8 @@ Two changes, both small.
 **A1. Attempt budgets are per-session-lifetime, not per-episode.**
 
 Replace the transition-triggered clear with a budget that only ever counts up for the life of
-the session. `retries: 3` on `ci-failed` comes to mean: *the orchestrator will auto-send a CI
-fix for this session at most 3 times, ever.* `escalateAfter: 30m` is measured from the first
+the session. `retries: 3` on `ci-failed` comes to mean: _the orchestrator will auto-send a CI
+fix for this session at most 3 times, ever._ `escalateAfter: 30m` is measured from the first
 trigger of that reaction on that session and is never restarted.
 
 This is a deliberate semantic change and should be documented in
@@ -74,7 +74,7 @@ reaction.ci-failed.firstTriggered=2026-09-03T11:04:22.117Z
 Load lazily in `executeReaction` when the in-memory tracker is absent, so a restart mid-repair
 resumes the count instead of resetting it.
 
-*Constraint to respect:* `updateMetadata` (`metadata.ts:179`) merges and preserves unknown
+_Constraint to respect:_ `updateMetadata` (`metadata.ts:179`) merges and preserves unknown
 keys — safe. `writeMetadata` (`metadata.ts:141`) rebuilds the record from the typed
 `SessionMetadata` shape and **drops** unknown keys. Either route every reaction-state write
 through `updateMetadata`, or give `writeMetadata` a passthrough for extra keys. Pick one and
@@ -108,7 +108,7 @@ These are the graded results. Write them first; the first one fails on `main` to
 
 `CLAUDE.md` and `ARCHITECTURE.md` both describe "flat metadata files + JSONL event log."
 There is no event log. `createEvent` is called in five places in `lifecycle-manager.ts`;
-every result goes to `notifyHuman` and is then discarded. `/api/events` streams *current*
+every result goes to `notifyHuman` and is then discarded. `/api/events` streams _current_
 state snapshots over SSE, not history.
 
 Worse, `checkSession` only constructs an event when `priority !== "info"`
@@ -125,7 +125,7 @@ number that says whether the reaction config is worth keeping.
 **B1. Separate event creation from notification routing.**
 
 Introduce `emit(event)` in the lifecycle manager: append to the log always, route to notifiers
-conditionally. Move the `priority !== "info"` check so it gates *notification only*. Every
+conditionally. Move the `priority !== "info"` check so it gates _notification only_. Every
 current `createEvent` call site goes through `emit`. This is the structural change; the
 persistence itself is trivial.
 
@@ -156,6 +156,7 @@ without this the file grows unbounded.
 malformed lines rather than throwing — a torn line must not make the history unreadable.
 
 Surfaces:
+
 - `ao events [sessionId] [--since 24h]` — the primary consumer, for post-mortems.
 - `GET /api/events/history?sessionId=` — leave the existing SSE route alone.
 

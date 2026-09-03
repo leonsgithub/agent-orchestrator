@@ -104,6 +104,16 @@ projects:
 #   info: [slack]              # summary, all done
 
 # Reactions — auto-responses to events (these are the defaults)
+#
+# `retries` and `escalateAfter` are budgets per session lifetime, not per episode:
+# `retries: 2` means the orchestrator sends at most 2 auto-fixes for a given
+# session before escalating to a human, however many times CI breaks and is
+# repaired in between. A duration `escalateAfter` runs from the first time the
+# reaction fired for that session and is never restarted.
+#
+# Budgets are cleared when the session merges or is killed, when the review
+# comments that triggered one are resolved, or by `ao reaction reset <session>`.
+# `ao reaction status <session>` shows what a session has used.
 # reactions:
 #   ci-failed:
 #     auto: true

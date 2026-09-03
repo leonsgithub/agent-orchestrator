@@ -215,6 +215,11 @@ Config loaded from `agent-orchestrator.yaml` (see `agent-orchestrator.yaml.examp
 ## Design Decisions
 
 1. **Stateless orchestrator** — no database, flat metadata files + event log
+   - Session state: `~/.agent-orchestrator/{hash}-{projectId}/sessions/{name}` (key=value)
+   - Event history: `~/.agent-orchestrator/{hash}-{projectId}/events.jsonl` (append-only,
+     rotated at 10MB) — every lifecycle event, whether or not a human was notified.
+     Read it with `ao events` or `GET /api/events/history`; `/api/events` is the live
+     SSE stream of current state and replays nothing.
 2. **Plugins implement interfaces** — pure implementation of interface from `types.ts`
 3. **Push notifications** — Notifier is primary human interface, not dashboard
 4. **Two-tier event handling** — auto-handle routine issues, notify human when judgment needed

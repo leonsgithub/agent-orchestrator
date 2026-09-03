@@ -31,6 +31,19 @@ export {
   listMetadata,
 } from "./metadata.js";
 
+// Event log — append-only orchestrator event history
+export { appendEvent, readEvents } from "./event-log.js";
+export type { ReadEventsOptions } from "./event-log.js";
+
+// Reaction state — persisted per-session escalation budgets
+export {
+  readReactionBudget,
+  writeReactionBudget,
+  clearReactionBudget,
+  listReactionBudgets,
+} from "./reaction-state.js";
+export type { ReactionBudget } from "./reaction-state.js";
+
 // tmux — command wrappers
 export {
   isTmuxAvailable,
@@ -99,6 +112,7 @@ export {
   getSessionsDir,
   getWorktreesDir,
   getArchiveDir,
+  getEventLogPath,
   getOriginFilePath,
   generateSessionName,
   generateTmuxName,

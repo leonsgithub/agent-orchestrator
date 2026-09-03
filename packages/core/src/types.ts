@@ -1015,6 +1015,12 @@ export interface SessionMetadata {
   dashboardPort?: number;
   terminalWsPort?: number;
   directTerminalWsPort?: number;
+  /**
+   * Keys written by subsystems that own their own namespace (reaction budgets,
+   * review-backlog fingerprints). Carried through read/write so a full
+   * `writeMetadata` — restore-from-archive, in particular — does not erase them.
+   */
+  extra?: Record<string, string>;
 }
 
 // =============================================================================
@@ -1068,6 +1074,12 @@ export interface LifecycleManager {
 
   /** Force-check a specific session now */
   check(sessionId: SessionId): Promise<void>;
+
+  /**
+   * Clear persisted reaction budgets for a session so auto-handling resumes.
+   * Omit `reactionKey` to reset every reaction for that session.
+   */
+  resetReactions(sessionId: SessionId, reactionKey?: string): Promise<void>;
 }
 
 /** Plugin registry — discovery + loading */
@@ -1142,11 +1154,7 @@ export type CIFailureCategory =
   | "unknown";
 
 /** Action the scanner can dispatch for a detected issue */
-export type PipelineFixAction =
-  | "auto-rebase"
-  | "spawn-fix-agent"
-  | "retry-ci"
-  | "notify-human";
+export type PipelineFixAction = "auto-rebase" | "spawn-fix-agent" | "retry-ci" | "notify-human";
 
 /** A single finding from the pipeline scanner */
 export interface PipelineFinding {
